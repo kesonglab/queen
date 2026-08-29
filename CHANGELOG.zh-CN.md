@@ -35,7 +35,7 @@
 ## v1.1.0 (2026-08-19)
 
 ### 新增
-- 界面更名为 Queen，全新视觉风格。
+- 界面更名为 Queen，全新视觉风格；其中的风格与 TUI 设计借鉴了开源项目 Mole。
 - 批量下载：进度条 + 已用时间 + 预估剩余时间。
 - 应用内更新日志查看（本文件，TUI 菜单可读）。
 - 中英双语界面（设置中切换）。
@@ -48,7 +48,7 @@
 - 进度数值更新不再产生水平布局抖动（定宽对齐）。
 
 ### 技术栈
-- Go + BubbleTea + Lip Gloss（同 Mole）。
+- Go + BubbleTea + Lip Gloss，TUI 风格借鉴自 Mole。
 - 配置文件：`~/.config/videodl/config.json`。
 - 失败记录：`~/Downloads/视频失败链接-failed_links.txt`。
 

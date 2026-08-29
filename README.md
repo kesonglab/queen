@@ -38,7 +38,7 @@ own worker, so a stalled task does not block the remainder of the batch.
   browser selection.
 - Bilingual interface (Chinese / English).
 - Native macOS notifications upon batch completion and per-task failure.
-- Multiple visual themes (inherited from Mole).
+- Multiple visual themes (the interface style borrows heavily from Mole).
 
 ## Requirements
 
@@ -152,6 +152,11 @@ See [CHANGELOG.md](CHANGELOG.md), or browse it from the in-application "Changelo
 
 Issues and pull requests are welcome. Before submitting, ensure that the working tree passes
 `make lint` and `make test`.
+
+## Acknowledgements
+
+The overall visual style and terminal interface design of Queen are inspired by, and borrow heavily
+from, the excellent open-source project **Mole**. Many thanks to the Mole authors for their great work.
 
 ## License
 

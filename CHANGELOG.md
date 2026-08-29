@@ -45,7 +45,8 @@
 ## v1.1.0 (2026-08-19)
 
 ### Added
-- Renamed the interface to Queen with a refreshed visual style.
+- Renamed the interface to Queen with a refreshed visual style; the style and TUI design were borrowed
+  from the open-source project Mole.
 - Batch download: aggregated progress bar, elapsed time, and projected remaining time.
 - In-application changelog viewer (this file, readable from the TUI menu).
 - Bilingual interface (Chinese / English, switchable in Settings).
@@ -59,7 +60,7 @@
 - Numeric progress updates no longer cause horizontal layout jitter (fixed-width alignment).
 
 ### Stack
-- Go + BubbleTea + Lip Gloss (same as Mole).
+- Go + BubbleTea + Lip Gloss, and the TUI style borrowed from Mole.
 - Configuration file: `~/.config/videodl/config.json`.
 - Failure log: `~/Downloads/视频失败链接-failed_links.txt`.
 
