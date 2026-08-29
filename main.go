@@ -18,6 +18,9 @@ import (
 //go:embed CHANGELOG.md
 var changelogMD string
 
+//go:embed CHANGELOG.zh-CN.md
+var changelogMDZh string
+
 // version 由构建时通过 -ldflags "-X main.version=vX.Y.Z" 注入，见 Makefile。
 var version = "1.2.1"
 
@@ -600,7 +603,6 @@ func (m *model) menuView() string {
 		}
 		desc := styleDim.Render(tr(m.cfg, item.descKey))
 		rows = append(rows, marker+key+" "+label+"  "+desc)
-		rows = append(rows, "") // 行间距加宽
 	}
 	menu := strings.Join(rows, "\n")
 	footer := styleDim.Render(tr(m.cfg, "menu_nav"))
@@ -793,7 +795,11 @@ func (m *model) updateView() string {
 
 func (m *model) changelogView() string {
 	b := m.banner()
-	lines := strings.Split(strings.TrimRight(changelogMD, "\n"), "\n")
+	content := changelogMD
+	if m.cfg.Lang == "zh" {
+		content = changelogMDZh
+	}
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	title := styleTitle.Render("  ── " + tr(m.cfg, "changelog_title") + " ──")
 	visible := maxInt(m.height-6, 5)
 	maxOff := maxInt(len(lines)-visible, 0)
