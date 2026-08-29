@@ -61,7 +61,7 @@
 ### Stack
 - Go + BubbleTea + Lip Gloss (same as Mole).
 - Configuration file: `~/.config/videodl/config.json`.
-- Failure log: `~/Downloads/视频失败链接.txt`.
+- Failure log: `~/Downloads/视频失败链接-failed_links.txt`.
 
 ## v1.0.0 (2026-08-19)
 - Initial release, migrated from the bash-based video download script.

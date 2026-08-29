@@ -90,7 +90,7 @@ func expandHome(p string) string {
 // 失败链接记录文件
 func retryFile() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Downloads", "视频失败链接.txt")
+	return filepath.Join(home, "Downloads", "视频失败链接-failed_links.txt")
 }
 
 func appendToRetry(url string) {

@@ -5,6 +5,10 @@ terminal user interface (TUI) implemented with [Bubble Tea](https://github.com/c
 and [Lip Gloss](https://github.com/charmbracelet/lipgloss), and concurrent multi-task download support.
 
 <p align="center">
+<a href="/README.md"><b>English</b></a> · <a href="/README.zh-CN.md">中文</a>
+</p>
+
+<p align="center">
 <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=for-the-badge&logo=go&logoColor=white">
 <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge&logo=open%20source%20initiative&logoColor=white">
 <img src="https://img.shields.io/badge/Platform-macOS-8a2be2?style=for-the-badge&logo=apple&logoColor=white">
@@ -128,7 +132,7 @@ application's settings page or by hand:
 | `merge_format` | Output container format (default `mp4`) |
 | `lang` | Interface language (`zh` / `en`) |
 
-Failed links are recorded to `~/Downloads/视频失败链接.txt`.
+Failed links are recorded to `~/Downloads/视频失败链接-failed_links.txt`.
 
 ## Development
 
