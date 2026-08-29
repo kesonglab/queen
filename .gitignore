@@ -1,0 +1,25 @@
+# 构建产物
+/queen
+/videodl
+dist/
+release/
+*.out
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 测试 & 覆盖率
+coverage.txt
+coverage.html
+*.coverprofile
+
+# 日志
+*.log
