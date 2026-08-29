@@ -9,7 +9,7 @@ and [Lip Gloss](https://github.com/charmbracelet/lipgloss), and concurrent multi
 <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge&logo=open%20source%20initiative&logoColor=white">
 <img src="https://img.shields.io/badge/Platform-macOS-8a2be2?style=for-the-badge&logo=apple&logoColor=white">
 <img src="https://img.shields.io/badge/Build-CI_passing-success?style=for-the-badge&logo=githubactions&logoColor=white">
-<img src="https://img.shields.io/badge/release-v1.2.1-ff69b4?style=for-the-badge">
+<img src="https://img.shields.io/github/v/release/kesonglab/queen?style=for-the-badge&logo=github&logoColor=white">
 <img src="https://img.shields.io/badge/yt--dlp-powered-cc0000?style=for-the-badge">
 </p>
 
@@ -49,6 +49,23 @@ own worker, so a stalled task does not block the remainder of the batch.
 via Homebrew.
 
 ## Installation
+
+### Download a binary
+
+Prebuilt binaries are attached to each [release](https://github.com/kesonglab/queen/releases) for both
+Apple Silicon (`darwin/arm64`) and Intel (`darwin/amd64`) Macs. Download the matching zip, unpack it,
+and run `queen` from the extracted folder:
+
+```bash
+arch=$(uname -m); [ "$arch" = "x86_64" ] && arch=amd64
+curl -fsSL -o queen.zip \
+  https://github.com/kesonglab/queen/releases/latest/download/queen-darwin-$arch.zip
+unzip queen.zip
+./queen
+```
+
+Because the binary is not signed, macOS may block the first launch. If it does, open **System Settings →
+Privacy & Security** and choose *Open Anyway*, or right-click the file and select *Open*.
 
 ### Manual build
 
