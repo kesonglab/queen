@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.2 (2026-08-29)
+
+### Docs
+- Documented that the visual / TUI style is borrowed from the open-source project Mole, added an
+  Acknowledgements section, and noted the same in the README and this changelog.
+
 ## v1.2.1 (2026-08-22)
 
 ### Added
