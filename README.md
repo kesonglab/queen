@@ -36,6 +36,9 @@ own worker, so a stalled task does not block the remainder of the batch.
 - Automatic recording of failed links, with one-key retry.
 - Configurable playlist mode, audio-only extraction (mp3), subtitles, metadata embedding, and cookie
   browser selection.
+- Best-quality support for X.com / Twitter: X (or `t.co`) links are downloaded at the highest available
+  quality by automatically passing the logged-in browser cookies to yt-dlp (X caps quality for anonymous
+  requests and gates many videos behind "Requires authentication").
 - Bilingual interface (Chinese / English).
 - Native macOS notifications upon batch completion and per-task failure.
 - Multiple visual themes (the interface style borrows heavily from Mole).
@@ -128,7 +131,7 @@ application's settings page or by hand:
 | `embed` | Embed title / thumbnail metadata |
 | `retry_times` | Retries per link (0–5) |
 | `concurrency` | Maximum concurrent downloads (1–16) |
-| `format` | yt-dlp format selector (default `bv*+ba/b`) |
+| `format` | yt-dlp format selector (default `bestvideo*+bestaudio/best`) |
 | `merge_format` | Output container format (default `mp4`) |
 | `lang` | Interface language (`zh` / `en`) |
 

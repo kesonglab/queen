@@ -22,7 +22,7 @@ var changelogMD string
 var changelogMDZh string
 
 // version 由构建时通过 -ldflags "-X main.version=vX.Y.Z" 注入，见 Makefile。
-var version = "1.2.1"
+var version = "1.3.0"
 
 type state int
 

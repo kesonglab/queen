@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.0 (2026-08-30)
+
+### Added
+- Best-quality support for X.com / Twitter videos: when a link is an X/Twitter (or `t.co`) URL,
+  Queen now auto-detects a local browser and passes its cookies to yt-dlp. This unlocks the highest
+  quality stream X serves (anonymous requests are capped — many videos throw "Requires authentication"),
+  and fixes downloads of auth-gated / age-limited content.
+- Default format selector is now the explicit "best quality" form `bestvideo*+bestaudio/best`.
+
 ## v1.2.2 (2026-08-29)
 
 ### Docs

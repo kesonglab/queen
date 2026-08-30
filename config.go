@@ -43,7 +43,7 @@ func defaultConfig() *Config {
 		Embed:         true,
 		RetryTimes:    2,
 		Concurrency:   4,
-		Format:        "bv*+ba/b",
+		Format:        "bestvideo*+bestaudio/best",
 		MergeFormat:   "mp4",
 		Lang:          "zh",
 	}
@@ -151,14 +151,19 @@ func readLines(path string) ([]string, error) {
 	return lines, sc.Err()
 }
 
-// 检测 cookie 浏览器
-func detectBrowser() string {
+// 检测 cookie 浏览器（仅返回设置项支持的浏览器名）
+// vars：以函数变量形式暴露，便于在测试中替换。
+var detectBrowser = func() string {
 	home, _ := os.UserHomeDir()
 	candidates := []struct {
 		name, dir string
 	}{
+		// 优先 Chrome 系，再 Firefox，再 Safari，最后 Edge
 		{"chrome", "Library/Application Support/Google/Chrome"},
+		{"chrome", "Library/Application Support/Chromium"},
+		{"chrome", "Library/Application Support/BraveSoftware/Brave-Browser"},
 		{"firefox", "Library/Application Support/Firefox"},
+		{"safari", "Library/Containers/com.apple.Safari/Data/Library/Cookies"},
 		{"safari", "Library/Cookies"},
 		{"edge", "Library/Application Support/Microsoft Edge"},
 	}
@@ -168,6 +173,23 @@ func detectBrowser() string {
 		}
 	}
 	return ""
+}
+
+// isXURL 判断是否为 X / Twitter 链接（含 t.co 短链）。
+// X 对匿名请求会限制画质，许多视频需登录态（Requires authentication）才能拿到最高画质，
+// 因此需要自动携带浏览器 cookies。
+func isXURL(u string) bool {
+	u = strings.ToLower(strings.TrimSpace(u))
+	u = strings.TrimPrefix(u, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	return strings.HasPrefix(u, "x.com/") ||
+		strings.HasPrefix(u, "www.x.com/") ||
+		strings.HasPrefix(u, "m.x.com/") ||
+		strings.HasPrefix(u, "twitter.com/") ||
+		strings.HasPrefix(u, "www.twitter.com/") ||
+		strings.HasPrefix(u, "mobile.twitter.com/") ||
+		strings.HasPrefix(u, "m.twitter.com/") ||
+		strings.HasPrefix(u, "t.co/")
 }
 
 func hasCmd(name string) bool {
@@ -184,8 +206,14 @@ func runCommand(name string, args ...string) (string, error) {
 // yt-dlp 下载参数
 func (c *Config) ytdlpArgs(url string) []string {
 	args := []string{}
-	if c.CookieBrowser != "" {
-		args = append(args, "--cookies-from-browser", c.CookieBrowser)
+	browser := c.CookieBrowser
+	if browser == "" && isXURL(url) {
+		// X/Twitter 默认下载最高画质需要一个已登录的浏览器 cookies（否则画质被封顶、
+		// 认证受限视频无法下载）。用户未显式指定浏览器时自动探测。
+		browser = detectBrowser()
+	}
+	if browser != "" {
+		args = append(args, "--cookies-from-browser", browser)
 	}
 	if !c.Playlist {
 		args = append(args, "--no-playlist")

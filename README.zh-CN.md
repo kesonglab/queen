@@ -33,6 +33,8 @@ Queen 是 yt-dlp 的一个开箱即用、单文件安装的终端前端。它将
 - 批量进度：聚合进度条、已用时间与预估总时长。
 - 自动记录失败链接，支持一键重试。
 - 可配置播放列表模式、仅音频（mp3）、字幕、元数据嵌入与 Cookie 浏览器。
+- 针对 X.com / 推特的最高画质支持：X（或 `t.co`）链接会自动把已登录浏览器的 cookies 传给 yt-dlp，以获取
+  X 提供的最高画质（匿名请求会被封顶，许多视频甚至会提示「Requires authentication」）。
 - 中英双语界面。
 - 批量完成与单任务失败时发送原生 macOS 通知。
 - 多种视觉主题（界面风格大量借鉴了 Mole）。
@@ -121,7 +123,7 @@ queen
 | `embed` | 嵌入标题 / 封面元数据 |
 | `retry_times` | 每链接重试次数（0–5） |
 | `concurrency` | 最大并发下载数（1–16） |
-| `format` | yt-dlp 格式选择器（默认 `bv*+ba/b`） |
+| `format` | yt-dlp 格式选择器（默认 `bestvideo*+bestaudio/best`） |
 | `merge_format` | 输出容器格式（默认 `mp4`） |
 | `lang` | 界面语言（`zh` / `en`） |
 
