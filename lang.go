@@ -14,7 +14,7 @@ var languages = []lang{
 var translations = map[string]map[string]string{
 	"zh": {
 		"app_name":    "Queen",
-		"author":      "kesonglab💗 · yt-dlp 驱动 · Mole 风格",
+		"author":      "kesonglab💗 · 由 yt-dlp 强力驱动 · 采用 Mole 风格",
 		"menu_paste":  "粘贴链接下载",
 		"menu_paste_d": "每行一个链接，Ctrl+D 开始",
 		"menu_clip":   "从剪贴板读取",
@@ -97,7 +97,7 @@ var translations = map[string]map[string]string{
 	},
 	"en": {
 		"app_name":    "Queen",
-		"author":      "kesonglab💗 · yt-dlp powered · Mole style",
+		"author":      "kesonglab💗 · Power by yt-dlp · Mole style",
 		"menu_paste":  "Paste links to download",
 		"menu_paste_d": "One link per line, Ctrl+D to start",
 		"menu_clip":   "Read from clipboard",
