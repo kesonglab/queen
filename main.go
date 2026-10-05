@@ -22,7 +22,7 @@ var changelogMD string
 var changelogMDZh string
 
 // version 由构建时通过 -ldflags "-X main.version=vX.Y.Z" 注入，见 Makefile。
-var version = "1.3.0"
+var version = "1.4.0"
 
 type state int
 
@@ -70,9 +70,9 @@ type model struct {
 	sp         spinner.Model
 
 	// 更新 yt-dlp
-	updLines strings.Builder
-	updDone  bool
-	updOK    bool
+	updOut  string
+	updDone bool
+	updOK   bool
 
 	// 更新日志滚动
 	chgOffset int
@@ -131,7 +131,7 @@ func (m *model) menuItems() []menuItem {
 			return m.startDownload(urls)
 		}},
 		{"3", "menu_retry", "menu_retry_d", func(m *model) tea.Cmd {
-			urls := readRetry()
+			urls := readRetry(m.cfg.DownloadDir)
 			if len(urls) == 0 {
 				m.setToast(tr(m.cfg, "toast_no_retry"))
 				return nil
@@ -154,11 +154,14 @@ func (m *model) menuItems() []menuItem {
 			return nil
 		}},
 		{"6", "menu_update", "menu_update_d", func(m *model) tea.Cmd {
-			m.updLines.Reset()
+			m.updOut = ""
 			m.updDone = false
 			m.updOK = false
+			m.sp = spinner.New()
+			m.sp.Spinner = spinner.Dot
+			m.sp.Style = lipgloss.NewStyle().Foreground(blue)
 			m.state = stUpdate
-			return runUpdateCmd()
+			return tea.Batch(runUpdateCmd(), m.sp.Tick)
 		}},
 		{"7", "menu_changelog", "menu_changelog_d", func(m *model) tea.Cmd {
 			m.chgOffset = 0
@@ -287,9 +290,11 @@ func (m *model) update(msg tea.Msg) (tea.Cmd, error) {
 		return nil, nil
 
 	case updateDoneMsg:
-		m.updDone = true
-		m.updOK = msg.ok
-		m.updLines.WriteString(msg.out)
+		if m.state == stUpdate {
+			m.updDone = true
+			m.updOK = msg.ok
+			m.updOut = msg.out
+		}
 		return nil, nil
 
 	case spinner.TickMsg:
@@ -398,12 +403,15 @@ func (m *model) settingsKey(msg tea.KeyMsg) (tea.Cmd, error) {
 		m.state = stMenu
 		return nil, nil
 	case "enter":
-		if m.settingsCursor == len(items)-1 {
+		if m.settingsCursor < 0 || m.settingsCursor >= len(items) {
+			return nil, nil
+		}
+		switch items[m.settingsCursor].id {
+		case "save":
 			m.cfg.save()
 			m.state = stMenu
 			return nil, nil
-		}
-		if m.settingsCursor == 7 {
+		case "dir":
 			return m.editDir(), nil
 		}
 	case "up", "k":
@@ -439,11 +447,24 @@ func (m *model) downloadKey(msg tea.KeyMsg) (tea.Cmd, error) {
 		if m.dl != nil {
 			m.dl.abort()
 			m.aborted = true
+			// 立即把未完成任务标为已中止，避免摘要在 worker 回写前显示错误状态
+			for _, t := range m.tasks {
+				if t != nil && (t.Status == StatusPending || t.Status == StatusDownloading) {
+					t.Status = StatusAborted
+				}
+			}
 			m.state = stSummary
 		}
 		return nil, nil
 	}
 	return nil, nil
+}
+
+func (m *model) changelogContent() string {
+	if m.cfg.Lang == "zh" {
+		return changelogMDZh
+	}
+	return changelogMD
 }
 
 func (m *model) changelogKey(msg tea.KeyMsg) (tea.Cmd, error) {
@@ -458,7 +479,7 @@ func (m *model) changelogKey(msg tea.KeyMsg) (tea.Cmd, error) {
 			m.chgOffset--
 		}
 	case "down", "j":
-		lines := strings.Split(changelogMD, "\n")
+		lines := strings.Split(m.changelogContent(), "\n")
 		visible := maxInt(m.height-6, 5)
 		maxOff := maxInt(len(lines)-visible, 0)
 		if m.chgOffset < maxOff {
@@ -470,54 +491,69 @@ func (m *model) changelogKey(msg tea.KeyMsg) (tea.Cmd, error) {
 
 // ---------- 设置 ----------
 type settingItem struct {
+	id       string
 	labelKey string
 	value    string
-	action   bool // 是否按下 Enter 触发操作（编辑目录）
 }
+
+var formatOptions = []string{
+	"bestvideo*+bestaudio/best",
+	"best",
+	"bestaudio/best",
+}
+
+var mergeOptions = []string{"mp4", "mkv", "webm"}
 
 func (m *model) settingsItems() []settingItem {
 	c := m.cfg
 	return []settingItem{
-		{"setting_playlist", yesno(c, c.Playlist), false},
-		{"setting_audio", yesno(c, c.AudioOnly), false},
-		{"setting_subs", yesno(c, c.Subs), false},
-		{"setting_embed", yesno(c, c.Embed), false},
-		{"setting_cookie", cookieName(c, c.CookieBrowser), false},
-		{"setting_retry", fmt.Sprintf("%d %s", c.RetryTimes, tr(c, "times")), false},
-		{"setting_concurrency", fmt.Sprintf("%d", c.Concurrency), false},
-		{"setting_dir", c.DownloadDir, true},
-		{"setting_lang", langName(c.Lang), false},
-		{"setting_save", "", false},
+		{"playlist", "setting_playlist", yesno(c, c.Playlist)},
+		{"audio", "setting_audio", yesno(c, c.AudioOnly)},
+		{"subs", "setting_subs", yesno(c, c.Subs)},
+		{"embed", "setting_embed", yesno(c, c.Embed)},
+		{"cookie", "setting_cookie", cookieName(c, c.CookieBrowser)},
+		{"retry", "setting_retry", fmt.Sprintf("%d %s", c.RetryTimes, tr(c, "times"))},
+		{"concurrency", "setting_concurrency", fmt.Sprintf("%d", c.Concurrency)},
+		{"format", "setting_format", c.Format},
+		{"merge", "setting_merge", c.MergeFormat},
+		{"dir", "setting_dir", c.DownloadDir},
+		{"lang", "setting_lang", langName(c.Lang)},
+		{"save", "setting_save", ""},
 	}
 }
 
 func (m *model) toggleSetting(idx, delta int) {
+	items := m.settingsItems()
+	if idx < 0 || idx >= len(items) {
+		return
+	}
 	c := m.cfg
-	switch idx {
-	case 0:
+	switch items[idx].id {
+	case "playlist":
 		c.Playlist = !c.Playlist
-	case 1:
+	case "audio":
 		c.AudioOnly = !c.AudioOnly
-	case 2:
+	case "subs":
 		c.Subs = !c.Subs
-	case 3:
+	case "embed":
 		c.Embed = !c.Embed
-	case 4:
-		c.CookieBrowser = cycleCookie(c.CookieBrowser, delta)
-	case 5:
+	case "cookie":
+		c.CookieBrowser = cycleChoice(c.CookieBrowser, []string{"", "chrome", "chromium", "brave", "firefox", "safari", "edge"}, delta)
+	case "retry":
 		c.RetryTimes = (c.RetryTimes + delta + 6) % 6
-	case 6:
+	case "concurrency":
 		c.Concurrency = c.Concurrency + delta
-		// 左右键调到边界时也要 clamp，否则会出现 0/负数并发
 		if c.Concurrency < 1 {
 			c.Concurrency = 1
 		}
 		if c.Concurrency > 16 {
 			c.Concurrency = 16
 		}
-	case 7:
-		// 下载目录为动作项，左右键不处理
-	case 8:
+	case "format":
+		c.Format = cycleChoice(c.Format, formatOptions, delta)
+	case "merge":
+		c.MergeFormat = cycleChoice(c.MergeFormat, mergeOptions, delta)
+	case "lang":
 		c.Lang = nextLang(c.Lang)
 	}
 }
@@ -545,15 +581,20 @@ func langName(code string) string {
 	return code
 }
 
-func cycleCookie(cur string, delta int) string {
-	opts := []string{"", "chrome", "firefox", "safari", "edge"}
-	idx := 0
+func cycleChoice(cur string, opts []string, delta int) string {
+	idx := -1
 	for i, o := range opts {
 		if o == cur {
 			idx = i
+			break
 		}
 	}
-	idx = (idx + delta + len(opts)) % len(opts)
+	if idx < 0 {
+		opts = append([]string{cur}, opts...)
+		idx = 0
+	}
+	n := len(opts)
+	idx = (idx + delta%n + n) % n
 	return opts[idx]
 }
 
@@ -648,7 +689,7 @@ func (m *model) settingsView() string {
 // 定宽对齐，防止进度数值变化时文字跳动
 func (m *model) downloadView() string {
 	b := m.banner()
-	var rows []string
+	var shown []string
 	pending := 0
 	for _, t := range m.tasks {
 		if t == nil {
@@ -658,7 +699,24 @@ func (m *model) downloadView() string {
 			pending++
 			continue
 		}
-		rows = append(rows, m.taskRow(t))
+		shown = append(shown, m.taskRow(t))
+	}
+
+	budget := maxInt(m.height-10, 4)
+	used := 0
+	hidden := 0
+	var rows []string
+	for i, r := range shown {
+		n := strings.Count(r, "\n") + 1
+		if i > 0 && used+n > budget {
+			hidden = len(shown) - i
+			break
+		}
+		rows = append(rows, r)
+		used += n
+	}
+	if hidden > 0 {
+		rows = append(rows, styleDim.Render("  "+fmt.Sprintf(tr(m.cfg, "more_tasks"), hidden)))
 	}
 	if pending > 0 {
 		rows = append(rows, styleDim.Render("  "+tr(m.cfg, "waiting")+" × "+strconv.Itoa(pending)))
@@ -712,6 +770,8 @@ func (m *model) taskRow(t *Task) string {
 		if t.Error != "" {
 			line += "\n      " + styleRed.Render(t.Error)
 		}
+	case StatusAborted:
+		line = "  " + styleYellow.Render("⊘ ") + shortURL(t.URL) + "  " + styleDim.Render(tr(m.cfg, "download_aborted"))
 	}
 	return line
 }
@@ -736,8 +796,14 @@ func shortURL(u string) string {
 }
 
 func renderBar(pct, width int) string {
+	if pct < 0 {
+		pct = 0
+	}
 	if pct > 100 {
 		pct = 100
+	}
+	if width < 1 {
+		width = 1
 	}
 	filled := pct * width / 100
 	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
@@ -754,7 +820,7 @@ func (m *model) summaryView() string {
 		tr(m.cfg, "download_success"), styleGreen.Render(fmt.Sprint(succ)),
 		tr(m.cfg, "download_fail"), styleRed.Render(fmt.Sprint(fail))))
 	if fail > 0 {
-		rows = append(rows, styleGray.Render("  "+tr(m.cfg, "download_retry_file")+": "+retryFile()))
+		rows = append(rows, styleGray.Render("  "+tr(m.cfg, "download_retry_file")+": "+retryFile(m.cfg.DownloadDir)))
 	}
 	footer := styleDim.Render(tr(m.cfg, "download_summary_nav"))
 	return b + "\n\n" + strings.Join(rows, "\n") + "\n\n" + footer
@@ -779,7 +845,9 @@ func (m *model) countResults() (int, int) {
 func (m *model) updateView() string {
 	b := m.banner()
 	rows := []string{styleTitle.Render("  ── " + tr(m.cfg, "updating_title") + " ──")}
-	rows = append(rows, m.updLines.String())
+	if m.updOut != "" {
+		rows = append(rows, m.updOut)
+	}
 	if m.updDone {
 		if m.updOK {
 			rows = append(rows, styleGreen.Render("  "+tr(m.cfg, "update_ok")))
@@ -795,21 +863,20 @@ func (m *model) updateView() string {
 
 func (m *model) changelogView() string {
 	b := m.banner()
-	content := changelogMD
-	if m.cfg.Lang == "zh" {
-		content = changelogMDZh
-	}
-	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(m.changelogContent(), "\n"), "\n")
 	title := styleTitle.Render("  ── " + tr(m.cfg, "changelog_title") + " ──")
 	visible := maxInt(m.height-6, 5)
 	maxOff := maxInt(len(lines)-visible, 0)
-	if m.chgOffset > maxOff {
-		m.chgOffset = maxOff
+	off := m.chgOffset
+	if off > maxOff {
+		off = maxOff
 	}
-	end := minInt(len(lines), m.chgOffset+visible)
-	start := m.chgOffset
+	if off < 0 {
+		off = 0
+	}
+	end := minInt(len(lines), off+visible)
 	var body []string
-	for i := start; i < end; i++ {
+	for i := off; i < end; i++ {
 		body = append(body, lines[i])
 	}
 	footer := styleDim.Render(tr(m.cfg, "changelog_nav"))

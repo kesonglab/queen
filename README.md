@@ -41,7 +41,7 @@ own worker, so a stalled task does not block the remainder of the batch.
   requests and gates many videos behind "Requires authentication").
 - Bilingual interface (Chinese / English).
 - Native macOS notifications upon batch completion and per-task failure.
-- Multiple visual themes (the interface style borrows heavily from Mole).
+- Mole-inspired visual style for the terminal interface.
 
 ## Requirements
 
@@ -118,13 +118,14 @@ Paste one link per line, then press `Ctrl+D` to begin a batch download.
 
 ## Configuration
 
-The configuration file lives at `~/.config/videodl/config.json`. It can be edited through the
+The configuration file lives at `~/.config/queen/config.json` (legacy
+`~/.config/videodl/config.json` is migrated automatically on first launch). It can be edited through the
 application's settings page or by hand:
 
 | Field | Description |
 | --- | --- |
 | `download_dir` | Download directory (default `~/Downloads`) |
-| `cookie_browser` | Cookie browser to use (auto-detect / chrome / firefox / safari / edge) |
+| `cookie_browser` | Cookie browser to use (auto-detect / chrome / chromium / brave / firefox / safari / edge) |
 | `playlist` | Whether to download as a playlist |
 | `audio_only` | Extract audio only and transcode to mp3 |
 | `subs` | Download subtitles (zh/en) and embed them |
@@ -135,7 +136,12 @@ application's settings page or by hand:
 | `merge_format` | Output container format (default `mp4`) |
 | `lang` | Interface language (`zh` / `en`) |
 
-Failed links are recorded to `~/Downloads/视频失败链接-failed_links.txt`.
+Failed links are recorded to `<download_dir>/视频失败链接-failed_links.txt`.
+
+Cookie browsers: leaving `cookie_browser` empty auto-detects a local browser **only for X/Twitter
+(`t.co`) links**. Any explicit browser (or that auto-detect path) passes `--cookies-from-browser` to
+yt-dlp, which reads that browser's cookie database, including login sessions. Use a browser you
+trust on this machine, and prefer auto-detect unless a site actually needs cookies.
 
 ## Development
 
@@ -145,7 +151,7 @@ Failed links are recorded to `~/Downloads/视频失败链接-failed_links.txt`.
 | `make build` | Build the binary |
 | `make lint` | Run `go vet` static analysis |
 | `make test` | Run the test suite |
-| `make release VERSION=1.3.0` | Produce a versioned release artifact |
+| `make release VERSION=1.4.0` | Produce a versioned release artifact |
 
 ## Changelog
 

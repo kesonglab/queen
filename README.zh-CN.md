@@ -37,7 +37,7 @@ Queen 是 yt-dlp 的一个开箱即用、单文件安装的终端前端。它将
   X 提供的最高画质（匿名请求会被封顶，许多视频甚至会提示「Requires authentication」）。
 - 中英双语界面。
 - 批量完成与单任务失败时发送原生 macOS 通知。
-- 多种视觉主题（界面风格大量借鉴了 Mole）。
+- Mole 风格的终端视觉界面。
 
 ## 环境要求
 
@@ -111,15 +111,16 @@ queen
 
 ## 配置
 
-配置文件位于 `~/.config/videodl/config.json`。可在应用的设置页编辑，也可手动修改：
+配置文件位于 `~/.config/queen/config.json`（首次启动会自动从旧路径
+`~/.config/videodl/config.json` 迁移）。可在应用的设置页编辑，也可手动修改：
 
 | 字段 | 说明 |
 | --- | --- |
 | `download_dir` | 下载目录（默认 `~/Downloads`） |
-| `cookie_browser` | 使用的 Cookie 浏览器（自动检测 / chrome / firefox / safari / edge） |
+| `cookie_browser` | 使用的 Cookie 浏览器（自动检测 / chrome / chromium / brave / firefox / safari / edge） |
 | `playlist` | 是否以播放列表方式下载 |
 | `audio_only` | 仅提取音频并转码为 mp3 |
-| `subs` | 下载字幕（zh/en）并嵌入 |
+| `subs` | 下载字幕（中/英）并嵌入 |
 | `embed` | 嵌入标题 / 封面元数据 |
 | `retry_times` | 每链接重试次数（0–5） |
 | `concurrency` | 最大并发下载数（1–16） |
@@ -127,7 +128,11 @@ queen
 | `merge_format` | 输出容器格式（默认 `mp4`） |
 | `lang` | 界面语言（`zh` / `en`） |
 
-失败链接记录在 `~/Downloads/视频失败链接-failed_links.txt`。
+失败链接记录到 `<download_dir>/视频失败链接-failed_links.txt`。
+
+Cookie 浏览器：`cookie_browser` 为空时，**仅对 X/Twitter（`t.co`）链接**自动探测本机浏览器。一旦指定了浏览器
+（或走了上述自动探测），Queen 会把 `--cookies-from-browser` 传给 yt-dlp，从而读取该浏览器的 Cookie 库，
+其中包含登录态。请只对自己信任的本机浏览器开启，非必要站点保持自动检测即可。
 
 ## 开发
 
@@ -137,7 +142,7 @@ queen
 | `make build` | 构建二进制 |
 | `make lint` | 运行 `go vet` 静态检查 |
 | `make test` | 运行测试套件 |
-| `make release VERSION=1.3.0` | 生成带版本号的 release 产物 |
+| `make release VERSION=1.4.0` | 生成带版本号的 release 产物 |
 
 ## 更新日志
 

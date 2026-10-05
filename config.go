@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 // Config 程序配置
@@ -27,9 +29,11 @@ type Config struct {
 }
 
 const (
-	configDir  = ".config/videodl"
-	configFile = "config.json"
-	defaultDir = "Downloads"
+	configDir       = ".config/queen"
+	legacyConfigDir = ".config/videodl"
+	configFile      = "config.json"
+	defaultDir      = "Downloads"
+	retryFileName   = "视频失败链接-failed_links.txt"
 )
 
 func defaultConfig() *Config {
@@ -54,16 +58,56 @@ func configPath() string {
 	return filepath.Join(home, configDir, configFile)
 }
 
+func legacyConfigPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, legacyConfigDir, configFile)
+}
+
+// clampConfig 将配置值限制在合法范围内
+func clampConfig(c *Config) {
+	if c.Concurrency < 1 {
+		c.Concurrency = 1
+	}
+	if c.Concurrency > 16 {
+		c.Concurrency = 16
+	}
+	if c.RetryTimes < 0 {
+		c.RetryTimes = 0
+	}
+	if c.RetryTimes > 5 {
+		c.RetryTimes = 5
+	}
+	if c.Format == "" {
+		c.Format = "bestvideo*+bestaudio/best"
+	}
+	if c.MergeFormat == "" {
+		c.MergeFormat = "mp4"
+	}
+	if c.Lang != "zh" && c.Lang != "en" {
+		c.Lang = "zh"
+	}
+}
+
 func loadConfig() *Config {
 	cfg := defaultConfig()
 	data, err := os.ReadFile(configPath())
+	migrated := false
 	if err != nil {
-		return cfg
+		// 从旧路径 ~/.config/videodl 迁移
+		data, err = os.ReadFile(legacyConfigPath())
+		if err != nil {
+			return cfg
+		}
+		migrated = true
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
-		return cfg
+		return defaultConfig()
 	}
 	cfg.DownloadDir = expandHome(cfg.DownloadDir)
+	clampConfig(cfg)
+	if migrated {
+		cfg.save()
+	}
 	return cfg
 }
 
@@ -71,8 +115,9 @@ func (c *Config) save() {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, configDir)
 	_ = os.MkdirAll(dir, 0o755)
+	clampConfig(c)
 	data, _ := json.MarshalIndent(c, "", "  ")
-	_ = os.WriteFile(filepath.Join(dir, configFile), data, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, configFile), data, 0o600)
 }
 
 func expandHome(p string) string {
@@ -87,14 +132,22 @@ func expandHome(p string) string {
 	return p
 }
 
-// 失败链接记录文件
-func retryFile() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Downloads", "视频失败链接-failed_links.txt")
+// 失败链接记录文件（放在下载目录下）
+func retryFile(downloadDir string) string {
+	if downloadDir == "" {
+		home, _ := os.UserHomeDir()
+		downloadDir = filepath.Join(home, defaultDir)
+	}
+	return filepath.Join(downloadDir, retryFileName)
 }
 
-func appendToRetry(url string) {
-	f := retryFile()
+var retryMu sync.Mutex
+
+func appendToRetry(downloadDir, url string) {
+	retryMu.Lock()
+	defer retryMu.Unlock()
+
+	f := retryFile(downloadDir)
 	_ = os.MkdirAll(filepath.Dir(f), 0o755)
 	lines, _ := readLines(f)
 	for _, l := range lines {
@@ -102,7 +155,7 @@ func appendToRetry(url string) {
 			return
 		}
 	}
-	file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
@@ -110,8 +163,11 @@ func appendToRetry(url string) {
 	fmt.Fprintln(file, url)
 }
 
-func removeFromRetry(url string) {
-	f := retryFile()
+func removeFromRetry(downloadDir, url string) {
+	retryMu.Lock()
+	defer retryMu.Unlock()
+
+	f := retryFile(downloadDir)
 	lines, err := readLines(f)
 	if err != nil {
 		return
@@ -126,11 +182,13 @@ func removeFromRetry(url string) {
 		_ = os.Remove(f)
 		return
 	}
-	_ = os.WriteFile(f, []byte(strings.Join(out, "\n")+"\n"), 0o644)
+	_ = os.WriteFile(f, []byte(strings.Join(out, "\n")+"\n"), 0o600)
 }
 
-func readRetry() []string {
-	lines, _ := readLines(retryFile())
+func readRetry(downloadDir string) []string {
+	retryMu.Lock()
+	defer retryMu.Unlock()
+	lines, _ := readLines(retryFile(downloadDir))
 	return lines
 }
 
@@ -151,17 +209,33 @@ func readLines(path string) ([]string, error) {
 	return lines, sc.Err()
 }
 
-// 检测 cookie 浏览器（仅返回设置项支持的浏览器名）
+// 检测 cookie 浏览器（仅返回 yt-dlp 支持的浏览器名）
 // vars：以函数变量形式暴露，便于在测试中替换。
 var detectBrowser = func() string {
+	return detectBrowserOnce()
+}
+
+var (
+	browserDetectOnce sync.Once
+	browserDetected   string
+)
+
+func detectBrowserOnce() string {
+	browserDetectOnce.Do(func() {
+		browserDetected = detectBrowserUncached()
+	})
+	return browserDetected
+}
+
+func detectBrowserUncached() string {
 	home, _ := os.UserHomeDir()
 	candidates := []struct {
 		name, dir string
 	}{
 		// 优先 Chrome 系，再 Firefox，再 Safari，最后 Edge
 		{"chrome", "Library/Application Support/Google/Chrome"},
-		{"chrome", "Library/Application Support/Chromium"},
-		{"chrome", "Library/Application Support/BraveSoftware/Brave-Browser"},
+		{"chromium", "Library/Application Support/Chromium"},
+		{"brave", "Library/Application Support/BraveSoftware/Brave-Browser"},
 		{"firefox", "Library/Application Support/Firefox"},
 		{"safari", "Library/Containers/com.apple.Safari/Data/Library/Cookies"},
 		{"safari", "Library/Cookies"},
@@ -218,17 +292,36 @@ func (c *Config) ytdlpArgs(url string) []string {
 	if !c.Playlist {
 		args = append(args, "--no-playlist")
 	}
+
+	retries := c.RetryTimes
+	if retries < 0 {
+		retries = 0
+	}
+	if retries > 5 {
+		retries = 5
+	}
+
+	// 分片并发随任务并发下调，避免 16×16 打满磁盘/网络
+	fragments := 16
+	if c.Concurrency > 4 {
+		fragments = 8
+	}
+	if c.Concurrency > 8 {
+		fragments = 4
+	}
+
 	args = append(args,
 		"-f", c.Format,
 		"--merge-output-format", c.MergeFormat,
 		"-o", "%(title)s [%(id)s].%(ext)s",
 		"-P", c.DownloadDir,
 		"--no-overwrites",
-		"--concurrent-fragments", "16",
+		"--concurrent-fragments", strconv.Itoa(fragments),
 		"--http-chunk-size", "10M",
 		"--buffer-size", "16K",
 		"--socket-timeout", "30",
-		"--retries", "5",
+		"--retries", strconv.Itoa(retries),
+		"--fragment-retries", strconv.Itoa(retries),
 		"--newline",
 		"--progress",
 	)

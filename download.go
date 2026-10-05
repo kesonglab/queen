@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,6 +26,7 @@ const (
 	StatusDownloading
 	StatusDone
 	StatusFailed
+	StatusAborted
 )
 
 // Task 单个下载任务
@@ -92,6 +95,16 @@ func (d *downloader) ensureTrack(idx int) *progTrack {
 		tr = &progTrack{}
 		d.tracks[idx] = tr
 	}
+	return tr
+}
+
+// resetTrack 重置进度跟踪器（新流 / 新目标文件开始时）
+func (d *downloader) resetTrack(idx int) *progTrack {
+	if d.tracks == nil {
+		d.tracks = make(map[int]*progTrack)
+	}
+	tr := &progTrack{}
+	d.tracks[idx] = tr
 	return tr
 }
 
@@ -175,15 +188,19 @@ type downloader struct {
 	mu     sync.Mutex
 	cmds   map[int]*exec.Cmd
 
-	tasks    []*Task
-	tracks   map[int]*progTrack
-	start    time.Time
-	total    int
-	done     int32
+	tasks  []*Task
+	tracks map[int]*progTrack
+	start  time.Time
+	total  int
+	done   int32
 }
 
 func newDownloader(cfg *Config, urls []string) *downloader {
 	ctx, cancel := context.WithCancel(context.Background())
+	tasks := make([]*Task, len(urls))
+	for i, u := range urls {
+		tasks[i] = &Task{URL: u, Status: StatusPending}
+	}
 	return &downloader{
 		cfg:    cfg,
 		urls:   urls,
@@ -191,6 +208,8 @@ func newDownloader(cfg *Config, urls []string) *downloader {
 		ctx:    ctx,
 		cancel: cancel,
 		cmds:   make(map[int]*exec.Cmd),
+		tasks:  tasks,
+		total:  len(urls),
 	}
 }
 
@@ -199,14 +218,13 @@ func (d *downloader) run() {
 	d.start = time.Now()
 	total := len(d.urls)
 	d.total = total
-	d.tasks = make([]*Task, total)
-	for i, u := range d.urls {
-		d.tasks[i] = &Task{URL: u, Status: StatusPending}
-	}
 
 	concurrency := d.cfg.Concurrency
 	if concurrency < 1 {
 		concurrency = 1
+	}
+	if concurrency > 16 {
+		concurrency = 16
 	}
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
@@ -217,6 +235,9 @@ func (d *downloader) run() {
 			defer wg.Done()
 			select {
 			case <-d.ctx.Done():
+				d.updateTask(idx, func(t *Task) {
+					t.Status = StatusAborted
+				})
 				return
 			case sem <- struct{}{}:
 			}
@@ -239,8 +260,12 @@ func (d *downloader) worker(idx int) {
 		t.Status = StatusDownloading
 	})
 	err := d.runYtdlp(idx, url)
+	canceled := errors.Is(err, context.Canceled) || d.ctx.Err() != nil
 	d.updateTask(idx, func(t *Task) {
-		if err != nil {
+		if canceled {
+			t.Status = StatusAborted
+			t.Error = ""
+		} else if err != nil {
 			t.Status = StatusFailed
 			t.Error = cleanErr(err.Error())
 		} else {
@@ -248,10 +273,12 @@ func (d *downloader) worker(idx int) {
 			t.Percent = 100
 		}
 	})
-	if err != nil {
-		appendToRetry(url)
+	if canceled {
+		// 用户中止：不写入失败链接
+	} else if err != nil {
+		appendToRetry(d.cfg.DownloadDir, url)
 	} else {
-		removeFromRetry(url)
+		removeFromRetry(d.cfg.DownloadDir, url)
 	}
 	done := atomic.AddInt32(&d.done, 1)
 	d.send(batchProgressMsg{done: int(done), total: d.total, elapsed: time.Since(d.start)})
@@ -260,12 +287,18 @@ func (d *downloader) worker(idx int) {
 func (d *downloader) abort() {
 	d.cancel()
 	d.mu.Lock()
+	pids := make([]int, 0, len(d.cmds))
 	for _, c := range d.cmds {
 		if c != nil && c.Process != nil {
-			_ = c.Process.Kill()
+			pids = append(pids, c.Process.Pid)
 		}
 	}
 	d.mu.Unlock()
+	for _, pid := range pids {
+		// 杀掉整个进程组，避免 ffmpeg 等子进程残留
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	}
 }
 
 func (d *downloader) send(m tea.Msg) {
@@ -297,9 +330,17 @@ var ytDlpRunner = func(ctx context.Context, args ...string) *exec.Cmd {
 func (d *downloader) runYtdlp(idx int, url string) error {
 	args := d.cfg.ytdlpArgs(url)
 	cmd := ytDlpRunner(d.ctx, args...)
+	// 独立进程组，便于 abort 时一并杀掉 ffmpeg 等子进程
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+
+	// 与 abort 共用同一把锁，避免 Start 写入 Process 时并发 Kill
 	d.mu.Lock()
 	d.cmds[idx] = cmd
+	errStart := cmd.Start()
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
@@ -307,14 +348,10 @@ func (d *downloader) runYtdlp(idx int, url string) error {
 		d.mu.Unlock()
 	}()
 
-	pr, pw := io.Pipe()
-	cmd.Stdout = pw
-	cmd.Stderr = pw
-
-	if err := cmd.Start(); err != nil {
+	if errStart != nil {
 		pw.Close()
 		pr.Close()
-		return err
+		return errStart
 	}
 
 	readDone := make(chan struct{})
@@ -349,6 +386,12 @@ func (d *downloader) handleLine(idx int, line string) {
 			t.Status = StatusDownloading
 
 			track := d.ensureTrack(idx)
+
+			// 新流开始：进度从接近 100% 跳回低位时重置跟踪器
+			// （bestvideo+bestaudio 等常见于视频流完成后开始音频流）
+			if track.maxPct >= 90 && pct < 30 {
+				track = d.resetTrack(idx)
+			}
 
 			// 进度单调不回退，避免进度条前后波动
 			if pct > track.maxPct {
@@ -439,6 +482,13 @@ func (d *downloader) handleLine(idx int, line string) {
 	if m := reDest.FindStringSubmatch(line); m != nil {
 		d.updateTask(idx, func(t *Task) {
 			t.Title = m[1]
+			// 新目标文件：重置进度，避免上一流的 100% 锁死后续流
+			d.resetTrack(idx)
+			t.Percent = 0
+			t.Downloaded = "—"
+			t.Total = "—"
+			t.Speed = "—"
+			t.ETA = ""
 		})
 		return
 	}
@@ -461,8 +511,9 @@ func cleanErr(s string) string {
 	if i := strings.Index(s, "\n"); i >= 0 {
 		s = s[:i]
 	}
-	if len(s) > 200 {
-		s = s[:200] + "..."
+	r := []rune(s)
+	if len(r) > 200 {
+		s = string(r[:200]) + "..."
 	}
 	return s
 }

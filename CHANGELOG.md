@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.4.0 (2026-10-05)
+
+### Added
+- Settings page can cycle the yt-dlp format selector and merge container (`mp4` / `mkv` / `webm`).
+- Download view truncates overflow tasks and shows a "N more tasks" summary.
+
+### Fixed
+- Settings "Retries per link" now actually passed to yt-dlp (`--retries` / `--fragment-retries`);
+  previously the UI value was ignored and retries were hard-coded to 5.
+- Concurrent append/remove of the failed-links file is now mutex-protected to avoid lost or
+  corrupted entries under high concurrency.
+- User abort (`q` / `Esc`) no longer marks tasks as Failed or writes them to the retry file;
+  queued tasks are marked Aborted instead of staying Pending.
+- Multi-stream downloads (`bestvideo+bestaudio`) no longer freeze the progress bar at 100% after
+  the first stream; a new Destination / stream resets the tracker.
+- Abort now kills the whole process group so ffmpeg children are not left behind.
+- Chinese changelog scrolling used the English line count; it now uses the active language content.
+- Update-yt-dlp screen spinner now animates.
+- Brave / Chromium are detected as `brave` / `chromium` (not mislabeled as `chrome`).
+- Config concurrency / retry values are clamped on load and at runtime.
+- `renderBar` no longer panics on negative percentages; `cleanErr` truncates on rune boundaries.
+
+### Changed
+- Config directory moved to `~/.config/queen/` (auto-migrates from `~/.config/videodl/`).
+- Failed-links file is stored under the configured download directory.
+- Cookie browser options include chromium and brave.
+- Settings rows are identified by id rather than numeric index (format/merge can be inserted without breaking Enter / ←→).
+- Fragment concurrency scales down when task concurrency is high (avoids 16×16 overload).
+- Config and retry files are written with mode `0600`.
+
 ## v1.3.0 (2026-08-30)
 
 ### Added
