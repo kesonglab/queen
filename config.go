@@ -5,141 +5,366 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
-// Config 程序配置
+// Config 是 ~/.config/queen/config.json 的映射。字段名保持向后兼容：
+// v1.4.0 的旧字段含义不变，新增字段在缺失时由 defaultConfig 提供默认值。
 type Config struct {
+	ConfigVersion int    `json:"config_version"`
 	DownloadDir   string `json:"download_dir"`
-	CookieBrowser string `json:"cookie_browser"`
-	Playlist      bool   `json:"playlist"`
-	AudioOnly     bool   `json:"audio_only"`
-	Subs          bool   `json:"subs"`
-	Embed         bool   `json:"embed"`
-	RetryTimes    int    `json:"retry_times"`
-	Concurrency   int    `json:"concurrency"`
-	Format        string `json:"format"`
-	MergeFormat   string `json:"merge_format"`
 	Lang          string `json:"lang"`
+	Theme         string `json:"theme"` // auto | dark | light
+
+	// 内容
+	Playlist       bool   `json:"playlist"`        // 下载整个播放列表
+	PlaylistFolder bool   `json:"playlist_folder"` // 播放列表存放到子目录并按序号命名
+	AudioOnly      bool   `json:"audio_only"`
+	AudioFormat    string `json:"audio_format"` // m4a | mp3 | opus | flac | best
+	Subs           bool   `json:"subs"`
+	AutoSubs       bool   `json:"auto_subs"`
+	SubLangs       string `json:"sub_langs"`
+	Embed          bool   `json:"embed"` // 嵌入元数据/封面（默认关，见性能优化）
+
+	// 画质/容器
+	FormatPreset string `json:"format_preset"` // quality | compat | custom
+	Format       string `json:"format"`        // 仅 custom 使用
+	MergeFormat  string `json:"merge_format"`  // mp4 | mkv | webm
+
+	// 网络/性能
+	Concurrency      int    `json:"concurrency"`       // 并行任务数
+	Fragments        int    `json:"fragments"`         // 每任务分片并发（-N）
+	ConnectionBudget int    `json:"connection_budget"` // 全局连接预算
+	SameSiteLimit    int    `json:"same_site_limit"`   // 同一站点并行任务上限
+	RetryTimes       int    `json:"retry_times"`
+	RetrySleep       int    `json:"retry_sleep"`    // 秒
+	ThrottledRate    string `json:"throttled_rate"` // 例如 100K，空串关闭
+	LimitRate        string `json:"limit_rate"`     // 限速，例如 2M，空串关闭
+
+	// 站点/认证
+	CookieBrowser string `json:"cookie_browser"` // 空 = 自动
+	CookiesFile   string `json:"cookies_file"`   // cookies.txt 路径（可选）
+	Impersonate   string `json:"impersonate"`    // 空 = 关闭；chrome / chrome-136 / safari ...
+	ExtractorArgs string `json:"extractor_args"`
+	Proxy         string `json:"proxy"`
+	UserAgent     string `json:"user_agent"`
+	Referer       string `json:"referer"`
+
+	// 其它
+	TrimFilenames     int  `json:"trim_filenames"`
+	IgnoreYtdlpConfig bool `json:"ignore_ytdlp_config"`
+	Archive           bool `json:"download_archive"`
+	PrivacyMode       bool `json:"privacy_mode"` // 通知/日志不出现 URL 与标题
+	KeepFailureLogs   bool `json:"keep_failure_logs"`
+	UpdateCheck       bool `json:"update_check"`
 }
 
 const (
-	configDir       = ".config/queen"
-	legacyConfigDir = ".config/videodl"
-	configFile      = "config.json"
-	defaultDir      = "Downloads"
-	retryFileName   = "视频失败链接-failed_links.txt"
+	configVersion    = 2
+	configDirName    = ".config/queen"
+	legacyConfigDir  = ".config/videodl"
+	configFileName   = "config.json"
+	sitesFileName    = "sites.json"
+	stateDirName     = ".local/state/queen"
+	logsDirName      = "logs"
+	retryFileName    = "failed_links.txt"
+	legacyRetryName  = "视频失败链接-failed_links.txt"
+	archiveFileName  = ".queen-archive.txt"
+	defaultDownloads = "Downloads"
+
+	maxLogFiles = 200
 )
+
+// 设置页可循环的选项集合（顺序即 ←→ 的顺序）。
+var (
+	formatPresetOptions  = []string{"quality", "compat", "custom"}
+	mergeFormatOptions   = []string{"mp4", "mkv", "webm"}
+	audioFormatOptions   = []string{"m4a", "mp3", "opus", "flac", "best"}
+	themeOptions         = []string{"auto", "dark", "light"}
+	cookieBrowserOptions = []string{"", "chrome", "chromium", "brave", "firefox", "safari", "edge"}
+	// 与 `yt-dlp --list-impersonate-targets`（curl_cffi）提供的客户端一致
+	impersonateOptions = []string{"", "chrome", "chrome-136", "chrome-133", "safari", "safari-18.4", "firefox", "edge"}
+	fragmentOptions    = []int{4, 8, 16}
+)
+
+// 画质预设对应的 yt-dlp 格式选择器。
+func presetFormat(preset string) string {
+	switch preset {
+	case "compat":
+		// 尽量选择 h264 + aac，macOS/QuickTime 兼容性最好
+		return "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/b[ext=mp4]/bv*+ba/b"
+	case "custom":
+		return ""
+	default: // quality
+		return "bv*+ba/b"
+	}
+}
 
 func defaultConfig() *Config {
 	home, _ := os.UserHomeDir()
 	return &Config{
-		DownloadDir:   filepath.Join(home, defaultDir),
-		CookieBrowser: "", // 空 = 自动检测
-		Playlist:      true,
-		AudioOnly:     false,
-		Subs:          false,
-		Embed:         true,
-		RetryTimes:    2,
-		Concurrency:   4,
-		Format:        "bestvideo*+bestaudio/best",
-		MergeFormat:   "mp4",
-		Lang:          "zh",
+		ConfigVersion:     configVersion,
+		DownloadDir:       filepath.Join(home, defaultDownloads),
+		Lang:              "zh",
+		Theme:             "auto",
+		Playlist:          false,
+		PlaylistFolder:    true,
+		AudioOnly:         false,
+		AudioFormat:       "m4a",
+		Subs:              false,
+		AutoSubs:          false,
+		SubLangs:          "zh.*,en.*",
+		Embed:             false,
+		FormatPreset:      "quality",
+		Format:            "bv*+ba/b",
+		MergeFormat:       "mp4",
+		Concurrency:       4,
+		Fragments:         8,
+		ConnectionBudget:  32,
+		SameSiteLimit:     2,
+		RetryTimes:        2,
+		RetrySleep:        3,
+		ThrottledRate:     "100K",
+		LimitRate:         "",
+		CookieBrowser:     "",
+		CookiesFile:       "",
+		Impersonate:       "",
+		ExtractorArgs:     "",
+		Proxy:             "",
+		UserAgent:         "",
+		Referer:           "",
+		TrimFilenames:     200,
+		IgnoreYtdlpConfig: true,
+		Archive:           false,
+		PrivacyMode:       false,
+		KeepFailureLogs:   true,
+		UpdateCheck:       true,
 	}
+}
+
+// ---------- 路径 ----------
+
+func homeDir() string {
+	h, err := os.UserHomeDir()
+	if err != nil || h == "" {
+		return "/tmp"
+	}
+	return h
 }
 
 func configPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, configDir, configFile)
+	return filepath.Join(homeDir(), configDirName, configFileName)
 }
+
+func configDir() string { return filepath.Join(homeDir(), configDirName) }
 
 func legacyConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, legacyConfigDir, configFile)
+	return filepath.Join(homeDir(), legacyConfigDir, configFileName)
 }
 
-// clampConfig 将配置值限制在合法范围内
-func clampConfig(c *Config) {
-	if c.Concurrency < 1 {
-		c.Concurrency = 1
-	}
-	if c.Concurrency > 16 {
-		c.Concurrency = 16
-	}
-	if c.RetryTimes < 0 {
-		c.RetryTimes = 0
-	}
-	if c.RetryTimes > 5 {
-		c.RetryTimes = 5
-	}
-	if c.Format == "" {
-		c.Format = "bestvideo*+bestaudio/best"
-	}
-	if c.MergeFormat == "" {
-		c.MergeFormat = "mp4"
-	}
-	if c.Lang != "zh" && c.Lang != "en" {
-		c.Lang = "zh"
-	}
-}
+func sitesPath() string { return filepath.Join(configDir(), sitesFileName) }
 
-func loadConfig() *Config {
-	cfg := defaultConfig()
-	data, err := os.ReadFile(configPath())
-	migrated := false
-	if err != nil {
-		// 从旧路径 ~/.config/videodl 迁移
-		data, err = os.ReadFile(legacyConfigPath())
-		if err != nil {
-			return cfg
-		}
-		migrated = true
-	}
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return defaultConfig()
-	}
-	cfg.DownloadDir = expandHome(cfg.DownloadDir)
-	clampConfig(cfg)
-	if migrated {
-		cfg.save()
-	}
-	return cfg
-}
-
-func (c *Config) save() {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, configDir)
-	_ = os.MkdirAll(dir, 0o755)
-	clampConfig(c)
-	data, _ := json.MarshalIndent(c, "", "  ")
-	_ = os.WriteFile(filepath.Join(dir, configFile), data, 0o600)
-}
+func logsDir() string { return filepath.Join(homeDir(), stateDirName, logsDirName) }
 
 func expandHome(p string) string {
+	p = strings.TrimSpace(p)
 	if p == "~" {
-		h, _ := os.UserHomeDir()
-		return h
+		return homeDir()
 	}
 	if strings.HasPrefix(p, "~/") {
-		h, _ := os.UserHomeDir()
-		return filepath.Join(h, p[2:])
+		return filepath.Join(homeDir(), p[2:])
 	}
 	return p
 }
 
-// 失败链接记录文件（放在下载目录下）
+// retryFile 返回下载目录下的失败链接文件；空目录回退到默认下载目录。
 func retryFile(downloadDir string) string {
+	downloadDir = expandHome(downloadDir)
 	if downloadDir == "" {
-		home, _ := os.UserHomeDir()
-		downloadDir = filepath.Join(home, defaultDir)
+		downloadDir = filepath.Join(homeDir(), defaultDownloads)
 	}
 	return filepath.Join(downloadDir, retryFileName)
 }
+
+func legacyRetryFile(downloadDir string) string {
+	downloadDir = expandHome(downloadDir)
+	if downloadDir == "" {
+		downloadDir = filepath.Join(homeDir(), defaultDownloads)
+	}
+	return filepath.Join(downloadDir, legacyRetryName)
+}
+
+func archivePath(downloadDir string) string {
+	downloadDir = expandHome(downloadDir)
+	if downloadDir == "" {
+		downloadDir = filepath.Join(homeDir(), defaultDownloads)
+	}
+	return filepath.Join(downloadDir, archiveFileName)
+}
+
+// ---------- 读取 / 保存 ----------
+
+// loadNotice 是启动时需要展示给用户的提示（已 i18n 化，main 里再翻译）。
+type loadNotice struct {
+	key  string
+	args []any
+}
+
+// loadConfig 读取配置。返回的 notices 会在 TUI 启动后以 toast 形式提示用户。
+func loadConfig() (*Config, []loadNotice) {
+	cfg := defaultConfig()
+	var notices []loadNotice
+
+	data, err := os.ReadFile(configPath())
+	if err != nil {
+		// 从旧路径 ~/.config/videodl 迁移
+		if legacy, legacyErr := os.ReadFile(legacyConfigPath()); legacyErr == nil {
+			data = legacy
+			if json.Unmarshal(data, cfg) == nil {
+				cfg.normalize()
+				if err := cfg.save(); err == nil {
+					notices = append(notices, loadNotice{key: "notice_config_migrated"})
+				}
+			} else {
+				cfg = defaultConfig()
+				notices = append(notices, loadNotice{key: "notice_config_corrupt_backup"})
+			}
+			return cfg, notices
+		}
+		return cfg, notices
+	}
+
+	if err := json.Unmarshal(data, cfg); err != nil {
+		// 损坏配置：备份后回默认值，并明确告知用户，避免静默覆盖。
+		backup := configPath() + ".corrupt-" + time.Now().Format("20060102-150405")
+		_ = os.WriteFile(backup, data, 0o600)
+		cfg = defaultConfig()
+		notices = append(notices, loadNotice{key: "notice_config_corrupt_backup", args: []any{backup}})
+		return cfg, notices
+	}
+
+	cfg.DownloadDir = expandHome(cfg.DownloadDir)
+	cfg.normalize()
+	return cfg, notices
+}
+
+// save 原子写入配置（临时文件 + rename），返回错误供 UI 提示。
+func (c *Config) save() error {
+	c.normalize()
+	dir := configDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("%s: %w", dir, err)
+	}
+	c.ConfigVersion = configVersion
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, configFileName+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, configPath())
+}
+
+// normalize 把配置值限制在合法范围，并补齐空值。
+func (c *Config) normalize() {
+	c.ConfigVersion = configVersion
+	if strings.TrimSpace(c.DownloadDir) == "" {
+		c.DownloadDir = expandHome("~/Downloads")
+	}
+	c.DownloadDir = expandHome(c.DownloadDir)
+	if c.Lang != "zh" && c.Lang != "en" {
+		c.Lang = "zh"
+	}
+	if !containsString(themeOptions, c.Theme) {
+		c.Theme = "auto"
+	}
+	c.Concurrency = clampInt(c.Concurrency, 1, 16)
+	c.Fragments = clampInt(c.Fragments, 1, 16)
+	c.ConnectionBudget = clampInt(c.ConnectionBudget, 4, 64)
+	c.SameSiteLimit = clampInt(c.SameSiteLimit, 1, 8)
+	c.RetryTimes = clampInt(c.RetryTimes, 0, 10)
+	c.RetrySleep = clampInt(c.RetrySleep, 0, 60)
+	c.TrimFilenames = clampInt(c.TrimFilenames, 0, 240)
+	if c.TrimFilenames > 0 && c.TrimFilenames < 60 {
+		c.TrimFilenames = 60
+	}
+	if !containsString(formatPresetOptions, c.FormatPreset) {
+		c.FormatPreset = "quality"
+	}
+	if strings.TrimSpace(c.Format) == "" {
+		c.Format = "bv*+ba/b"
+	}
+	if !containsString(mergeFormatOptions, c.MergeFormat) {
+		c.MergeFormat = "mp4"
+	}
+	if !containsString(audioFormatOptions, c.AudioFormat) {
+		c.AudioFormat = "m4a"
+	}
+	if strings.TrimSpace(c.SubLangs) == "" {
+		c.SubLangs = "zh.*,en.*"
+	}
+	if c.CookieBrowser != "" && !containsString(cookieBrowserOptions, c.CookieBrowser) {
+		c.CookieBrowser = ""
+	}
+	c.CookiesFile = expandHome(c.CookiesFile)
+	c.ThrottledRate = strings.TrimSpace(c.ThrottledRate)
+	c.LimitRate = strings.TrimSpace(c.LimitRate)
+	c.Proxy = strings.TrimSpace(c.Proxy)
+	c.UserAgent = strings.TrimSpace(c.UserAgent)
+	c.Referer = strings.TrimSpace(c.Referer)
+	c.ExtractorArgs = strings.TrimSpace(c.ExtractorArgs)
+	c.Impersonate = strings.TrimSpace(c.Impersonate)
+}
+
+// effectiveFormat 返回当前应该传给 yt-dlp 的 -f 值。
+func (c *Config) effectiveFormat() string {
+	if c.FormatPreset == "custom" {
+		if f := strings.TrimSpace(c.Format); f != "" {
+			return f
+		}
+		return "bv*+ba/b"
+	}
+	if f := presetFormat(c.FormatPreset); f != "" {
+		return f
+	}
+	return "bv*+ba/b"
+}
+
+// diffFromDefault 用于设置页「恢复默认」。
+func (c *Config) resetToDefaults() {
+	def := defaultConfig()
+	lang := c.Lang // 语言不重置，避免用户瞬间看不懂界面
+	dir := c.DownloadDir
+	*c = *def
+	c.Lang = lang
+	if strings.TrimSpace(dir) != "" && dir != def.DownloadDir {
+		c.DownloadDir = dir
+	}
+}
+
+// ---------- 失败链接文件 ----------
 
 var retryMu sync.Mutex
 
@@ -148,7 +373,9 @@ func appendToRetry(downloadDir, url string) {
 	defer retryMu.Unlock()
 
 	f := retryFile(downloadDir)
-	_ = os.MkdirAll(filepath.Dir(f), 0o755)
+	if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+		return
+	}
 	lines, _ := readLines(f)
 	for _, l := range lines {
 		if l == url {
@@ -160,7 +387,7 @@ func appendToRetry(downloadDir, url string) {
 		return
 	}
 	defer file.Close()
-	fmt.Fprintln(file, url)
+	_, _ = fmt.Fprintln(file, url)
 }
 
 func removeFromRetry(downloadDir, url string) {
@@ -172,7 +399,7 @@ func removeFromRetry(downloadDir, url string) {
 	if err != nil {
 		return
 	}
-	var out []string
+	out := make([]string, 0, len(lines))
 	for _, l := range lines {
 		if l != url {
 			out = append(out, l)
@@ -192,6 +419,21 @@ func readRetry(downloadDir string) []string {
 	return lines
 }
 
+// migrateRetryFile 把 v1.4.0 的中英混杂文件名迁移为 failed_links.txt。
+func migrateRetryFile(downloadDir string) {
+	retryMu.Lock()
+	defer retryMu.Unlock()
+	oldName := legacyRetryFile(downloadDir)
+	if _, err := os.Stat(oldName); err != nil {
+		return
+	}
+	newName := retryFile(downloadDir)
+	if _, err := os.Stat(newName); err == nil {
+		return
+	}
+	_ = os.Rename(oldName, newName)
+}
+
 func readLines(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -200,6 +442,7 @@ func readLines(path string) ([]string, error) {
 	defer f.Close()
 	var lines []string
 	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		s := strings.TrimSpace(sc.Text())
 		if s != "" {
@@ -209,146 +452,53 @@ func readLines(path string) ([]string, error) {
 	return lines, sc.Err()
 }
 
-// 检测 cookie 浏览器（仅返回 yt-dlp 支持的浏览器名）
-// vars：以函数变量形式暴露，便于在测试中替换。
-var detectBrowser = func() string {
-	return detectBrowserOnce()
-}
+// ---------- 小工具 ----------
 
-var (
-	browserDetectOnce sync.Once
-	browserDetected   string
-)
-
-func detectBrowserOnce() string {
-	browserDetectOnce.Do(func() {
-		browserDetected = detectBrowserUncached()
-	})
-	return browserDetected
-}
-
-func detectBrowserUncached() string {
-	home, _ := os.UserHomeDir()
-	candidates := []struct {
-		name, dir string
-	}{
-		// 优先 Chrome 系，再 Firefox，再 Safari，最后 Edge
-		{"chrome", "Library/Application Support/Google/Chrome"},
-		{"chromium", "Library/Application Support/Chromium"},
-		{"brave", "Library/Application Support/BraveSoftware/Brave-Browser"},
-		{"firefox", "Library/Application Support/Firefox"},
-		{"safari", "Library/Containers/com.apple.Safari/Data/Library/Cookies"},
-		{"safari", "Library/Cookies"},
-		{"edge", "Library/Application Support/Microsoft Edge"},
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(home, c.dir)); err == nil {
-			return c.name
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
 		}
 	}
-	return ""
+	return false
 }
 
-// isXURL 判断是否为 X / Twitter 链接（含 t.co 短链）。
-// X 对匿名请求会限制画质，许多视频需登录态（Requires authentication）才能拿到最高画质，
-// 因此需要自动携带浏览器 cookies。
-func isXURL(u string) bool {
-	u = strings.ToLower(strings.TrimSpace(u))
-	u = strings.TrimPrefix(u, "https://")
-	u = strings.TrimPrefix(u, "http://")
-	return strings.HasPrefix(u, "x.com/") ||
-		strings.HasPrefix(u, "www.x.com/") ||
-		strings.HasPrefix(u, "m.x.com/") ||
-		strings.HasPrefix(u, "twitter.com/") ||
-		strings.HasPrefix(u, "www.twitter.com/") ||
-		strings.HasPrefix(u, "mobile.twitter.com/") ||
-		strings.HasPrefix(u, "m.twitter.com/") ||
-		strings.HasPrefix(u, "t.co/")
+// cycleChoice 在当前值与选项列表之间循环。
+// 当前值不在列表中时：向后取第一项，向前取最后一项。
+func cycleChoice(cur string, opts []string, delta int) string {
+	if len(opts) == 0 {
+		return cur
+	}
+	idx, found := 0, false
+	for i, o := range opts {
+		if o == cur {
+			idx, found = i, true
+			break
+		}
+	}
+	n := len(opts)
+	if !found {
+		if delta < 0 {
+			return opts[n-1]
+		}
+		return opts[0]
+	}
+	idx = ((idx+delta)%n + n) % n
+	return opts[idx]
 }
 
-func hasCmd(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
-}
-
-func runCommand(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
-// yt-dlp 下载参数
-func (c *Config) ytdlpArgs(url string) []string {
-	args := []string{}
-	browser := c.CookieBrowser
-	if browser == "" && isXURL(url) {
-		// X/Twitter 默认下载最高画质需要一个已登录的浏览器 cookies（否则画质被封顶、
-		// 认证受限视频无法下载）。用户未显式指定浏览器时自动探测。
-		browser = detectBrowser()
+func cycleInt(cur int, opts []int, delta int) int {
+	if len(opts) == 0 {
+		return cur
 	}
-	if browser != "" {
-		args = append(args, "--cookies-from-browser", browser)
+	idx := 0
+	for i, o := range opts {
+		if o == cur {
+			idx = i
+			break
+		}
 	}
-	if !c.Playlist {
-		args = append(args, "--no-playlist")
-	}
-
-	retries := c.RetryTimes
-	if retries < 0 {
-		retries = 0
-	}
-	if retries > 5 {
-		retries = 5
-	}
-
-	// 分片并发随任务并发下调，避免 16×16 打满磁盘/网络
-	fragments := 16
-	if c.Concurrency > 4 {
-		fragments = 8
-	}
-	if c.Concurrency > 8 {
-		fragments = 4
-	}
-
-	args = append(args,
-		"-f", c.Format,
-		"--merge-output-format", c.MergeFormat,
-		"-o", "%(title)s [%(id)s].%(ext)s",
-		"-P", c.DownloadDir,
-		"--no-overwrites",
-		"--concurrent-fragments", strconv.Itoa(fragments),
-		"--http-chunk-size", "10M",
-		"--buffer-size", "16K",
-		"--socket-timeout", "30",
-		"--retries", strconv.Itoa(retries),
-		"--fragment-retries", strconv.Itoa(retries),
-		"--newline",
-		"--progress",
-	)
-	if c.AudioOnly {
-		args = append(args, "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0")
-	}
-	if c.Embed {
-		args = append(args, "--embed-metadata", "--embed-thumbnail")
-	}
-	if c.Subs && !c.AudioOnly {
-		args = append(args, "--write-subs", "--sub-langs", "zh.*,en.*", "--embed-subs")
-	}
-	args = append(args, url)
-	return args
-}
-
-// notify 发送 macOS 桌面通知（非 macOS 平台静默跳过）
-func notify(title, msg, sound string) {
-	if runtime.GOOS != "darwin" {
-		return
-	}
-	esc := func(s string) string {
-		s = strings.ReplaceAll(s, "\n", " ")
-		s = strings.ReplaceAll(s, "\r", " ")
-		return strings.ReplaceAll(s, `"`, `""`)
-	}
-	script := fmt.Sprintf(`display notification "%s" with title "%s" sound name "%s"`,
-		esc(msg), esc(title), esc(sound))
-	_ = exec.Command("osascript", "-e", script).Start()
+	n := len(opts)
+	idx = ((idx+delta)%n + n) % n
+	return opts[idx]
 }

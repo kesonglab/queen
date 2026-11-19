@@ -1,5 +1,86 @@
 # Changelog
 
+## v1.6.0 (2026-11-19)
+
+### Added
+- Full interface redesign: a semantic theme system (`auto` / `dark` / `light`, `Ctrl+T` to cycle,
+  `NO_COLOR` for plain text), a responsive layout (content capped at 100 columns and centred, with a
+  friendly resize screen below 60x16), scrollable lists, a bottom status bar and a `?` help overlay.
+- Results page: a per-task table (site, task, size, duration, failure reason) with one-key actions —
+  `r` retry failed tasks, `o` open the download folder, `c` copy a diagnostics report and `l` open
+  the failure-log folder.
+- Per-task phase labels (extracting / downloading / merging / converting / embedding / metadata /
+  fixing), playlist progress (`item N/M`) and fragment progress (`frag N/M`) when a stream has no
+  known total size.
+- Connection budget and same-site parallel limit: all tasks share a global connection budget and at
+  most 2 tasks hit the same site by default (both configurable).
+- Built-in site profiles for YouTube, Bilibili, X/Twitter, Instagram, Facebook, TikTok, Douyin,
+  Twitch, Vimeo, Reddit, Niconico, SoundCloud and Rule34Video.
+- User site overrides in `~/.config/queen/sites.json` (top-level array or `{"profiles":[...]}`),
+  matched by domain suffix and merged field by field over the built-in profiles.
+- Per-site cookie strategies (`auto` / `off` / browser name / `cookies_file`), TLS impersonation
+  (`--impersonate`), `--extractor-args`, `Referer` and `User-Agent` overrides.
+- Error classifier with 12 categories and actionable hints, plus one automatic retry: browser cookies
+  for auth/membership failures and `--impersonate chrome` for Cloudflare challenges.
+- Failure logs under `~/.local/state/queen/logs` (latest 200 kept), a "copy diagnostics" report and
+  an "open logs folder" action on the results page.
+- yt-dlp freshness check (warn once the installed release is older than 45 days) with a one-key
+  upgrade page that uses `brew upgrade yt-dlp` for Homebrew installs and `yt-dlp -U` otherwise.
+- Privacy mode hides URLs, domains and titles in notifications and failure logs; Rule34Video enables
+  it by default.
+- Mouse-wheel scrolling on the main menu, lists and pages.
+- The in-app changelog now renders Markdown (headings, lists, inline code and links) instead of raw
+  source.
+- Single-task cancel (`x`) in the download view; abort-all stays on `q` / `Esc`.
+- Optional download archive (`--download-archive`, stored as `<download_dir>/.queen-archive.txt`).
+- `--version` / `-v` and `--help` / `-h` command-line flags that work without an interactive terminal.
+
+### Changed
+- Download progress is now parsed from structured `--progress-template` records with fixed
+  separators instead of regular expressions over human-readable text; stdout and stderr are read on
+  separate pipes and progress is coalesced every 120 ms.
+- Audio-only mode now extracts to `m4a` with `--audio-quality 0` by default instead of forcing an MP3
+  transcode; `mp3`, `opus`, `flac` and `best` remain selectable.
+- Metadata/thumbnail embedding is off by default, since it costs an extra network request and ffmpeg
+  pass per file.
+- Playlist mode is off by default; when enabled, items are stored in a playlist-named subfolder with
+  zero-padded indices.
+- Default network profile retuned: 8 fragment concurrency per task (was 16), global connection budget
+  32, same-site limit 2, 2 retries, 3-second retry sleep, `--throttled-rate 100K`,
+  `--trim-filenames 200` and `--ignore-config` enabled.
+- Format selection is split into `quality` / `compat` / `custom` presets; the compatibility preset
+  prefers H.264 + AAC and MP4, and the custom format selector is editable.
+- The settings page is reorganised into Content / Quality & container / Network & performance /
+  Auth & sites / General sections with a scrolling list and a text-editor overlay.
+- Version display is unified: builds with no injected version show `dev`, an injected `1.6.0` shows
+  `v1.6.0`, an injected `v1.6.0` is not double-prefixed, and `make build` derives the version from
+  `git describe`.
+- Configuration is written atomically (`config.json`, mode `0600`); a corrupt file is backed up to
+  `config.json.corrupt-<timestamp>` and defaults are restored with a toast; save errors are reported.
+
+### Fixed
+- Failure reasons now show the real yt-dlp error text instead of `exit status 1`.
+- Toasts appear on every screen and expire automatically (4 seconds for notices, 6 seconds for
+  errors) instead of being invisible or lingering forever.
+- Batch progress distinguishes successes from failures with separate counters and colours instead of
+  counting failed tasks as completed.
+- A single very long output line can no longer stall the pipe and freeze the interface.
+- Post-processing phases (merge, convert, embed) are shown explicitly instead of the progress bar
+  appearing stuck at 100%.
+- Final file sizes are read from the produced file after merging/conversion, so the results table
+  shows the real size.
+- A batch started right after aborting the previous one no longer receives stale messages from the
+  old batch (events are isolated by batch ID).
+- Notifications containing quotes or backslashes are delivered correctly, and repeated failures for
+  the same URL are throttled to avoid notification floods.
+
+### Removed
+- Removed the experimental `--http-chunk-size` tuning (and the fixed `--buffer-size` override),
+  which could break range requests and signed CDN URLs.
+- Removed the regular-expression parser for yt-dlp's human-readable progress output.
+- Removed the old bilingual failed-links filename `视频失败链接-failed_links.txt`; existing files are
+  migrated to `failed_links.txt` automatically.
+
 ## v1.4.0 (2026-10-05)
 
 ### Added
