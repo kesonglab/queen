@@ -44,14 +44,36 @@ jobs:
         run: |
           cd dist
           zip -r "queen-${{ matrix.goos }}-${{ matrix.goarch }}.zip" "queen-${{ matrix.goos }}-${{ matrix.goarch }}"
-          shasum -a 256 "queen-${{ matrix.goos }}-${{ matrix.goarch }}.zip" >> checksums.txt
           cd ..
 
-      - name: Upload assets to release
+      # 只上传 zip：SHA-256 清单由下面的 checksums job 统一生成，
+      # 避免 matrix 的两个 job 并发写同名 checksums.txt 互相覆盖。
+      - name: Upload archives to release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.zip
-            dist/checksums.txt
+          files: dist/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  checksums:
+    name: Aggregate SHA-256 checksums
+    runs-on: macos-latest
+    needs: release
+    steps:
+      - name: Download published archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          gh release download "$GITHUB_REF_NAME" --pattern '*.zip' --dir dist
+
+      - name: Generate checksums.txt
+        run: |
+          cd dist
+          shasum -a 256 *.zip | sort -k2 > checksums.txt
+          cat checksums.txt
+
+      - name: Upload checksums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/checksums.txt --clobber
